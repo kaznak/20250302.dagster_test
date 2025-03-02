@@ -13,6 +13,10 @@ dependencies = [
 dev = [
     "dagster-webserver", 
     "pytest",
+    "black",
+    "flake8",
+    "isort",
+    "mypy",
 ]
 
 [build-system]
