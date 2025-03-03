@@ -50,3 +50,7 @@ local_settings.py
 
 # Dagster
 /.tmp_dagster_home_*
+
+# Demo
+/data/input_images
+/data/output_images
