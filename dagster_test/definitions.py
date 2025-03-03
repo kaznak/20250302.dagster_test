@@ -161,7 +161,14 @@ def image_sensor(context: SensorEvaluationContext):
     3. 新しいパーティションのマテリアライズをリクエスト
     """
     # 現在のパーティションを取得
-    current_partitions = set(image_partitions.get_partitions(context.instance))
+    try:
+        # 新しいAPIを試す
+        current_partitions = set(
+            context.instance.get_dynamic_partitions(image_partitions.name)
+        )
+    except Exception as e:
+        context.log.error(f"パーティション取得中にエラー: {e}")
+        current_partitions = set()
 
     # ディレクトリ内の画像ファイルを取得
     image_files = get_image_files()
@@ -176,7 +183,22 @@ def image_sensor(context: SensorEvaluationContext):
 
     # 新しいパーティションを追加
     context.log.info(f"新しい画像パーティションを追加: {new_partitions}")
-    image_partitions.add_partitions(context.instance, list(new_partitions))
+    try:
+        # 新しいAPIを試す
+        context.instance.add_dynamic_partitions(
+            image_partitions.name, list(new_partitions)
+        )
+        context.log.info("パーティションを追加しました")
+    except Exception as e:
+        context.log.error(f"パーティション追加中にエラー: {e}")
+        # 代替手段としてDynamicPartitionsDefinitionのAPIを直接使用してみる
+        try:
+            for partition in new_partitions:
+                context.instance.add_dynamic_partition(image_partitions.name, partition)
+            context.log.info("個別に各パーティションを追加しました")
+        except Exception as e2:
+            context.log.error(f"個別パーティション追加中にエラー: {e2}")
+            return
 
     # 登録アセットのキー
     register_asset_key = AssetKey(["registered_images", "register_image"])
