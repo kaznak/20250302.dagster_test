@@ -3,18 +3,13 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
-import numpy as np
-from dagster import (AssetExecutionContext, AssetIn, AssetKey,
-                     AssetsDefinition, AssetSelection, AutoMaterializePolicy,
-                     Definitions, DynamicPartitionsDefinition,
-                     DynamicPartitionsSubset, MaterializeResult, Output,
-                     RunRequest, ScheduleDefinition, SensorDefinition,
-                     SensorEvaluationContext, StaticPartitionsDefinition,
-                     asset, multi_asset, sensor)
+from dagster import (AssetExecutionContext, AssetIn, AssetKey, Definitions,
+                     DynamicPartitionsDefinition, Output, RunRequest,
+                     ScheduleDefinition, SensorEvaluationContext, asset,
+                     sensor)
 from PIL import Image
 
 # 画像ディレクトリの設定
-# 画像が保存されるディレクトリへのパス
 IMAGE_DIR = os.path.join(Path(__file__).parent, "data", "input_images")
 
 # 動的パーティションの定義
@@ -188,7 +183,7 @@ def image_sensor(context: SensorEvaluationContext):
 image_sensor_schedule = ScheduleDefinition(
     name="run_image_sensor",
     cron_schedule="*/5 * * * *",  # 5分ごとに実行
-    sensor_name="image_sensor",
+    job=image_sensor,  # sensor_nameではなくjobを使用
     execution_timezone="Asia/Tokyo",
 )
 
