@@ -98,6 +98,8 @@ def image_sensor(context: SensorEvaluationContext):
     1. 新しい画像ファイルを検出
     2. 動的パーティションに追加
     3. 新しいパーティションのマテリアライズをリクエスト
+
+    TODO: パーティション情報の永続化
     """
     # 現在のパーティションを取得
     current_partitions = set(image_partitions.get_partitions(context.instance))
