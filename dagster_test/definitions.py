@@ -8,8 +8,9 @@ from dagster import (AssetExecutionContext, AssetIn, AssetKey,
                      AssetsDefinition, AssetSelection, AutoMaterializePolicy,
                      Definitions, DynamicPartitionsDefinition,
                      DynamicPartitionsSubset, MaterializeResult, Output,
-                     ScheduleDefinition, StaticPartitionsDefinition, asset,
-                     multi_asset)
+                     RunRequest, ScheduleDefinition, SensorDefinition,
+                     SensorEvaluationContext, StaticPartitionsDefinition,
+                     asset, multi_asset, sensor)
 from PIL import Image
 
 # 画像ディレクトリの設定
@@ -35,33 +36,9 @@ def get_image_files() -> List[str]:
     return image_files
 
 
-# 新しいパーティションを検出するアセット
-@asset(
-    auto_materialize_policy=AutoMaterializePolicy.eager(),
-    partitions_def=StaticPartitionsDefinition(
-        ["singleton"]
-    ),  # シングルトンパーティション
-)
-def detect_image_partitions(context: AssetExecutionContext) -> None:
-    """画像ディレクトリをスキャンして新しい画像パーティションを追加する"""
-    # 現在のパーティションを取得
-    current_partitions = set(image_partitions.get_partitions(context.instance))
-
-    # ディレクトリ内の画像ファイルを取得
-    image_files = get_image_files()
-    available_partitions = set(image_files)
-
-    # 新しいパーティションを検出
-    new_partitions = available_partitions - current_partitions
-    if new_partitions:
-        context.log.info(f"新しい画像パーティションを追加: {new_partitions}")
-        image_partitions.add_partitions(context.instance, list(new_partitions))
-
-
-# 画像を処理する外部アセット
+# 画像を処理するアセット
 @asset(
     partitions_def=image_partitions,
-    auto_materialize_policy=AutoMaterializePolicy.eager(),
     key_prefix=["processed_images"],
 )
 def process_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
@@ -111,68 +88,74 @@ def process_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
     )
 
 
-# 新しいパーティションのマテリアライゼーションを自動化するセンサーアセット
-@asset(
-    auto_materialize_policy=AutoMaterializePolicy.eager(),
-    deps=[detect_image_partitions],
+# 新しい画像パーティションを検出し、マテリアライズするセンサー
+@sensor(
+    job_name=None,  # アセットベースのセンサーなのでジョブ名は不要
 )
-def materialize_new_images(context: AssetExecutionContext) -> None:
-    """新しい画像パーティションを自動的にマテリアライズする"""
-    # 最後の実行以降に追加された画像パーティションを取得
-    all_partitions = image_partitions.get_partitions(context.instance)
+def image_sensor(context: SensorEvaluationContext):
+    """
+    画像ディレクトリを監視し、新しい画像を検出して処理するセンサー
+    1. 新しい画像ファイルを検出
+    2. 動的パーティションに追加
+    3. 新しいパーティションのマテリアライズをリクエスト
+    """
+    # 現在のパーティションを取得
+    current_partitions = set(image_partitions.get_partitions(context.instance))
 
-    # パーティションのステータスを確認して、マテリアライズが必要なものを特定
-    need_materialization = []
+    # ディレクトリ内の画像ファイルを取得
+    image_files = get_image_files()
+    available_partitions = set(image_files)
 
-    for partition in all_partitions:
-        asset_key = AssetKey(["processed_images", "process_image"])
-        if not context.instance.has_asset_key(asset_key):
-            need_materialization.append(partition)
-            continue
+    # 新しいパーティションを検出
+    new_partitions = available_partitions - current_partitions
 
-        last_materialization = context.instance.get_latest_materialization_event(
-            asset_key=asset_key,
-            partition_key=partition,
+    if not new_partitions:
+        context.log.info("新しい画像パーティションはありません")
+        return
+
+    # 新しいパーティションを追加
+    context.log.info(f"新しい画像パーティションを追加: {new_partitions}")
+    image_partitions.add_partitions(context.instance, list(new_partitions))
+
+    # 新しいパーティションのマテリアライズをリクエスト
+    asset_key = AssetKey(["processed_images", "process_image"])
+
+    # 各パーティションに対してマテリアライズをリクエスト
+    run_requests = []
+    for partition in new_partitions:
+        run_key = f"process_image_{partition}_{int(time.time())}"
+        run_config = {"ops": {"process_image": {"config": {"partition": partition}}}}
+
+        run_requests.append(
+            RunRequest(
+                run_key=run_key,
+                asset_selection=[asset_key],
+                partition_key=partition,
+                tags={"partition": partition},
+            )
         )
 
-        if last_materialization is None:
-            need_materialization.append(partition)
-
-    if need_materialization:
-        context.log.info(f"マテリアライズが必要な画像: {need_materialization}")
-
-        # 新しいパーティションをマテリアライズ
-        subset = DynamicPartitionsSubset(
-            dynamic_partitions_def=image_partitions,
-            partition_keys=need_materialization,
-        )
-
-        # データを外部化せずに直接マテリアライゼーションを行う実装例
-        # 実際のプロダクションでは、以下のようにジョブを起動する方が良い場合もあります
-        # context.instance.submit_job_for_materialization(...)
-        context.log.info(
-            f"{len(need_materialization)}個の新しい画像パーティションをマテリアライズします"
-        )
-    else:
-        context.log.info("マテリアライズが必要な新しい画像はありません")
+    context.log.info(
+        f"{len(new_partitions)}個の新しい画像パーティションをマテリアライズします"
+    )
+    return run_requests
 
 
-# スケジュールの定義
-check_images_schedule = ScheduleDefinition(
-    name="check_new_images",
+# スケジュールの定義（オプション：定期的にセンサーを実行する場合）
+image_sensor_schedule = ScheduleDefinition(
+    name="run_image_sensor",
     cron_schedule="*/5 * * * *",  # 5分ごとに実行
-    asset_selection=AssetSelection.assets(
-        detect_image_partitions, materialize_new_images
-    ),
+    sensor_name="image_sensor",
     execution_timezone="Asia/Tokyo",
 )
 
 # リソースとジョブの定義
 defs = Definitions(
-    assets=[detect_image_partitions, process_image, materialize_new_images],
-    schedules=[check_images_schedule],
+    assets=[process_image],
+    sensors=[image_sensor],
+    schedules=[image_sensor_schedule],
 )
 
 if __name__ == "__main__":
     # スクリプトを直接実行したときのために、何か便利な処理を追加することもできます
-    print("Dagster動的パーティショニング画像処理パイプラインを起動します...")
+    print("Dagsterセンサーベース画像処理パイプラインを起動します...")
