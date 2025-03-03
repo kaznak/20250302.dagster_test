@@ -9,7 +9,7 @@ from dagster import (AssetExecutionContext, AssetIn, AssetKey, Definitions,
 from PIL import Image
 
 # 画像ディレクトリの設定
-IMAGE_DIR = os.path.join(Path(__file__).parent, "data", "input_images")
+IMAGE_DIR = os.path.join(os.path.dirname(__file__), "../", "data/input_images")
 
 # 動的パーティションの定義
 image_partitions = DynamicPartitionsDefinition(name="image_partitions")
