@@ -39,6 +39,12 @@ def get_image_files() -> List[str]:
 )
 def register_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
     """パーティション（画像ファイル）を登録するだけのアセット"""
+    # パーティションキーの存在チェック
+    if not context.has_partition_key:
+        raise ValueError(
+            "このアセットはパーティションキーを指定して実行する必要があります"
+        )
+
     # パーティション（画像ファイル名）を取得
     partition_key = context.partition_key
     image_path = os.path.join(IMAGE_DIR, partition_key)
