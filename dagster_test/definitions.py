@@ -187,19 +187,20 @@ def image_sensor(context: SensorEvaluationContext):
 
 # スケジュールの定義
 # 注意: センサーは自動的に実行されるため、通常はスケジュールで実行する必要はありません
-from dagster import define_asset_job
+# センサー実行用のジョブ定義（アセットでなくセンサーを実行する）
+from dagster import sensor_evaluation_job
 
-# センサー用のジョブ定義
-image_sensor_job = define_asset_job(
-    name="image_sensor_job",
-    selection=[AssetKey(["registered_images", "register_image"])],  # リストで囲む
+# センサー評価ジョブの作成
+image_sensor_eval_job = sensor_evaluation_job(
+    name="image_sensor_eval_job",
+    sensors=[image_sensor],  # image_sensorセンサーを実行するジョブ
 )
 
 # スケジュール定義
 image_sensor_schedule = ScheduleDefinition(
     name="run_image_sensor",
-    cron_schedule="*/1 * * * *",  # 5分ごとに実行
-    job=image_sensor_job,  # 適切なジョブ定義を使用
+    cron_schedule="*/1 * * * *",  # 1分ごとに実行
+    job=image_sensor_eval_job,  # センサー評価ジョブを使用
     execution_timezone="Asia/Tokyo",
 )
 
