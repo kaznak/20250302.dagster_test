@@ -222,7 +222,7 @@ def process_image_non_deterministic(
 
     # 画像を回転
     image = image.rotate(rotation_angle, expand=True)
-    processing_ops.append(f"rotete: {rotation_angle} degrees")
+    processing_ops.append(f"rotate: {rotation_angle} degrees")
 
     # バージョン付きの保存パス
     version_file_name = f"{version}_{partition_key}"
