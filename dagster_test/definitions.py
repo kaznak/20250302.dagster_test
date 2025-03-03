@@ -1,3 +1,4 @@
+import json
 import os
 import random
 import time
@@ -158,7 +159,7 @@ def process_image_deterministic(
     )
 
 
-# ステップ3: 非決定的処理（新しい処理を追加）
+# ステップ3: 非決定的処理（バージョン管理機能付き）
 @asset(
     partitions_def=image_partitions,
     key_prefix=["processed_images"],
@@ -170,7 +171,7 @@ def process_image_deterministic(
 def process_image_non_deterministic(
     context: AssetExecutionContext, image_metadata: Dict[str, Any]
 ) -> Output[Dict[str, Any]]:
-    """登録された画像を乱数を使って非決定的に処理するアセット"""
+    """登録された画像を乱数を使って非決定的に処理するアセット（バージョン管理機能付き）"""
     # パーティションキーの存在チェック
     if not hasattr(context, "partition_key") or context.partition_key is None:
         raise ValueError(
@@ -201,6 +202,14 @@ def process_image_non_deterministic(
 
     context.log.info(f"乱数シード値: {seed}")
 
+    # タイムスタンプをバージョン識別子として使用
+    timestamp = int(time.time())
+    version = f"v{timestamp}"
+
+    # バージョンディレクトリ作成
+    version_dir = os.path.join(IMAGE_DIRS["output"], f"versions_{partition_key}")
+    os.makedirs(version_dir, exist_ok=True)
+
     # 画像を読み込む
     image = Image.open(image_path)
 
@@ -215,25 +224,67 @@ def process_image_non_deterministic(
     image = image.rotate(rotation_angle, expand=True)
     processing_ops.append(f"回転: {rotation_angle}度")
 
-    # 処理済み画像を保存するディレクトリ
-    processed_dir = IMAGE_DIRS["output"]
-    processed_path = os.path.join(processed_dir, f"non_deterministic_{partition_key}")
+    # バージョン付きの保存パス
+    version_file_name = f"{version}_{partition_key}"
+    version_path = os.path.join(version_dir, version_file_name)
 
-    # 処理した画像を保存
-    image.save(processed_path)
+    # 最新バージョンを示す通常の出力パス
+    latest_path = os.path.join(
+        IMAGE_DIRS["output"], f"non_deterministic_{partition_key}"
+    )
+
+    # 処理した画像をバージョン付きで保存
+    image.save(version_path)
+
+    # 最新バージョンとしても保存（上書き）
+    image.save(latest_path)
+
+    # バージョン情報ファイルの管理（JSON形式）
+    version_info_path = os.path.join(version_dir, "version_history.json")
+    version_info = {
+        "version": version,
+        "timestamp": timestamp,
+        "seed": seed,
+        "operations": processing_ops,
+        "image_path": version_path,
+    }
+
+    # 既存のバージョン履歴を読み込むか、新規作成
+    if os.path.exists(version_info_path):
+        try:
+            with open(version_info_path, "r") as f:
+                version_history = json.load(f)
+        except:
+            version_history = {"versions": []}
+    else:
+        version_history = {"versions": []}
+
+    # 新しいバージョン情報を追加
+    version_history["versions"].append(version_info)
+    version_history["latest_version"] = version
+
+    # バージョン履歴を保存
+    with open(version_info_path, "w") as f:
+        json.dump(version_history, f, indent=2)
 
     # 処理結果メタデータ
     processed_metadata = {
         **image_metadata,  # 元のメタデータを継承
-        "processed_at": time.time(),
-        "processed_path": processed_path,
+        "processed_at": timestamp,
+        "processed_path": latest_path,
+        "version_path": version_path,
+        "version": version,
+        "version_history_path": version_info_path,
         "processing_type": "non_deterministic",
         "random_seed": seed,  # 使用した乱数シード値を保存
         "processing_operations": processing_ops,  # 適用した処理の一覧
         "is_deterministic": False,  # 非決定的処理であることを明示
     }
 
-    context.log.info(f"非決定的画像処理完了: {partition_key} -> {processed_path}")
+    context.log.info(f"非決定的画像処理完了: {partition_key}")
+    context.log.info(f"バージョン: {version}")
+    context.log.info(f"バージョン保存先: {version_path}")
+    context.log.info(f"最新バージョン保存先: {latest_path}")
     context.log.info(f"適用した処理: {', '.join(processing_ops)}")
 
     return Output(
@@ -241,12 +292,12 @@ def process_image_non_deterministic(
         metadata={
             "filename": partition_key,
             "original_path": image_path,
-            "processed_path": processed_path,
+            "processed_path": latest_path,
+            "version_path": version_path,
+            "version": version,
             "processing_type": "non_deterministic",
-            "random_seed": seed,  # メタデータにもシード値を含める
-            "processing_operations": ", ".join(
-                processing_ops
-            ),  # 適用した処理をメタデータに追加
+            "random_seed": seed,
+            "processing_operations": ", ".join(processing_ops),
         },
     )
 
