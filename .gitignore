@@ -47,3 +47,6 @@ local_settings.py
 # Database
 *.db
 *.sqlite3
+
+# Dagster
+/.tmp_dagster_home_*
