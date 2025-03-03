@@ -201,50 +201,16 @@ def process_image_non_deterministic(
     # 画像を読み込む
     image = Image.open(image_path)
 
-    # 乱数に基づいて適用する処理をランダムに決定
+    # シンプルに90度、180度、270度のいずれかにランダムで回転させる
     processing_ops = []
 
-    # 1. ランダムな回転
-    if random.random() > 0.5:
-        rotation_angle = random.uniform(-15, 15)
-        image = image.rotate(rotation_angle, expand=True)
-        processing_ops.append(f"回転: {rotation_angle:.2f}度")
+    # 回転角度を選択（90度、180度、270度のいずれか）
+    rotation_options = [90, 180, 270]
+    rotation_angle = random.choice(rotation_options)
 
-    # 2. ランダムなフィルタ
-    filter_options = [
-        ("ぼかし", ImageFilter.BLUR),
-        ("シャープ", ImageFilter.SHARPEN),
-        ("エンボス", ImageFilter.EMBOSS),
-        ("輪郭検出", ImageFilter.CONTOUR),
-        ("エッジ検出", ImageFilter.FIND_EDGES),
-    ]
-
-    if random.random() > 0.3:
-        filter_name, filter_func = random.choice(filter_options)
-        image = image.filter(filter_func)
-        processing_ops.append(f"フィルタ: {filter_name}")
-
-    # 3. ランダムな輝度/コントラスト調整
-    if random.random() > 0.4:
-        brightness_factor = random.uniform(0.7, 1.3)
-        image = ImageEnhance.Brightness(image).enhance(brightness_factor)
-        processing_ops.append(f"輝度: {brightness_factor:.2f}")
-
-    if random.random() > 0.4:
-        contrast_factor = random.uniform(0.7, 1.5)
-        image = ImageEnhance.Contrast(image).enhance(contrast_factor)
-        processing_ops.append(f"コントラスト: {contrast_factor:.2f}")
-
-    # 4. ランダムな色調整（カラー画像の場合）
-    if image.mode in ["RGB", "RGBA"] and random.random() > 0.5:
-        color_factor = random.uniform(0.5, 1.5)
-        image = ImageEnhance.Color(image).enhance(color_factor)
-        processing_ops.append(f"彩度: {color_factor:.2f}")
-
-    # 5. グレースケール変換（確率で適用）
-    if random.random() > 0.7 and image.mode != "L":
-        image = image.convert("L")
-        processing_ops.append("グレースケール変換")
+    # 画像を回転
+    image = image.rotate(rotation_angle, expand=True)
+    processing_ops.append(f"回転: {rotation_angle}度")
 
     # 処理済み画像を保存するディレクトリ
     processed_dir = IMAGE_DIRS["output"]
