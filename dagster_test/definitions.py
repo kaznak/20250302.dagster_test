@@ -9,7 +9,7 @@ from dagster import (AssetExecutionContext, AssetIn, AssetKey, Definitions,
 from PIL import Image
 
 # 画像ディレクトリの設定
-BASED = Path(__file__).resolve().parent
+BASED = Path(__file__).resolve().parents[1]
 IMAGE_DIRS = {
     "input": os.path.join(BASED, "data/input_images"),
     "output": os.path.join(BASED, "data/output_images"),
@@ -29,8 +29,8 @@ def get_image_files() -> List[str]:
     image_extensions = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]
     image_files = []
 
-    for file in os.listdir(IMAGE_DIRS.input):
-        file_path = os.path.join(IMAGE_DIRS.input, file)
+    for file in os.listdir(IMAGE_DIRS["input"]):
+        file_path = os.path.join(IMAGE_DIRS["input"], file)
         if os.path.isfile(file_path) and any(
             file.lower().endswith(ext) for ext in image_extensions
         ):
@@ -54,7 +54,7 @@ def register_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
 
     # パーティション（画像ファイル名）を取得
     partition_key = context.partition_key
-    image_path = os.path.join(IMAGE_DIRS.input, partition_key)
+    image_path = os.path.join(IMAGE_DIRS["input"], partition_key)
 
     context.log.info(f"画像を登録中: {image_path}")
 
@@ -118,7 +118,7 @@ def process_image(
     image = Image.open(image_path)
 
     # 処理済み画像を保存するディレクトリ
-    processed_dir = IMAGE_DIRS.output
+    processed_dir = IMAGE_DIRS["output"]
     processed_path = os.path.join(processed_dir, f"processed_{partition_key}")
 
     # 実際の画像処理を実行（例：グレースケール変換）
