@@ -192,7 +192,7 @@ image_sensor_job = define_asset_job(
 # スケジュール定義
 image_sensor_schedule = ScheduleDefinition(
     name="run_image_sensor",
-    cron_schedule="*/5 * * * *",  # 5分ごとに実行
+    cron_schedule="*/1 * * * *",  # 5分ごとに実行
     job=image_sensor_job,  # 適切なジョブ定義を使用
     execution_timezone="Asia/Tokyo",
 )
