@@ -50,6 +50,7 @@ def get_image_files() -> List[str]:
 @asset(
     partitions_def=image_partitions,
     key_prefix=["registered_images"],
+    kinds=["python", "view"],
 )
 def register_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
     """パーティション（画像ファイル）を登録するだけのアセット"""
@@ -100,6 +101,7 @@ def register_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
     ins={
         "image_metadata": AssetIn(key=AssetKey(["registered_images", "register_image"]))
     },
+    kinds=["python", "view"],
 )
 def process_image_deterministic(
     context: AssetExecutionContext, image_metadata: Dict[str, Any]
@@ -163,6 +165,7 @@ def process_image_deterministic(
     ins={
         "image_metadata": AssetIn(key=AssetKey(["registered_images", "register_image"]))
     },
+    kinds=["python", "view"],
 )
 def process_image_non_deterministic(
     context: AssetExecutionContext, image_metadata: Dict[str, Any]
