@@ -14,7 +14,8 @@ from dagster import (AssetExecutionContext, AssetIn, AssetKey,
 from PIL import Image
 
 # 画像ディレクトリの設定
-IMAGE_DIR = "/path/to/image/directory"  # 画像が保存されるディレクトリへのパス
+# 画像が保存されるディレクトリへのパス
+IMAGE_DIR = os.path.join(Path(__file__).parent, "data", "input_images")
 
 # 動的パーティションの定義
 image_partitions = DynamicPartitionsDefinition(name="image_partitions")
@@ -36,50 +37,94 @@ def get_image_files() -> List[str]:
     return image_files
 
 
-# 画像を処理するアセット
+# ステップ1: 画像を登録するアセット（ファイル自体には何もしない）
 @asset(
     partitions_def=image_partitions,
-    key_prefix=["processed_images"],
+    key_prefix=["registered_images"],
 )
-def process_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
-    """パーティション（画像ファイル）ごとに画像処理を実行する"""
+def register_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
+    """パーティション（画像ファイル）を登録するだけのアセット"""
     # パーティション（画像ファイル名）を取得
     partition_key = context.partition_key
     image_path = os.path.join(IMAGE_DIR, partition_key)
 
-    context.log.info(f"画像を処理中: {image_path}")
+    context.log.info(f"画像を登録中: {image_path}")
 
     # 画像が存在するか確認
     if not os.path.exists(image_path):
         raise FileNotFoundError(f"画像ファイルが見つかりません: {image_path}")
 
-    # ここで画像処理を実行
-    # 例として、画像を読み込んで基本的なメタデータを抽出
+    # 画像のメタデータのみを取得
     image = Image.open(image_path)
 
-    # 画像の処理結果メタデータ
+    # 登録用メタデータ
     metadata = {
         "filename": partition_key,
         "format": image.format,
         "size": image.size,
         "mode": image.mode,
-        "processed_at": time.time(),
+        "registered_at": time.time(),
+        "image_path": image_path,
     }
 
-    # オプション: 処理済み画像を保存
+    context.log.info(f"画像登録完了: {partition_key}")
+
+    return Output(
+        metadata,
+        metadata={
+            "filename": partition_key,
+            "original_path": image_path,
+        },
+    )
+
+
+# ステップ2: 実際に画像を処理するアセット
+@asset(
+    partitions_def=image_partitions,
+    key_prefix=["processed_images"],
+    ins={
+        "image_metadata": AssetIn(key=AssetKey(["registered_images", "register_image"]))
+    },
+)
+def process_image(
+    context: AssetExecutionContext, image_metadata: Dict[str, Any]
+) -> Output[Dict[str, Any]]:
+    """登録された画像を実際に処理するアセット"""
+    # パーティション（画像ファイル名）を取得
+    partition_key = context.partition_key
+    image_path = image_metadata["image_path"]
+
+    context.log.info(f"画像を処理中: {image_path}")
+
+    # 画像が存在するか確認（念のため）
+    if not os.path.exists(image_path):
+        raise FileNotFoundError(f"画像ファイルが見つかりません: {image_path}")
+
+    # 画像を読み込む
+    image = Image.open(image_path)
+
+    # 処理済み画像を保存するディレクトリ
     processed_dir = os.path.join(IMAGE_DIR, "processed")
     os.makedirs(processed_dir, exist_ok=True)
     processed_path = os.path.join(processed_dir, f"processed_{partition_key}")
 
-    # 簡単な処理の例（グレースケール変換）
+    # 実際の画像処理を実行（例：グレースケール変換）
     if image.mode != "L":
         image = image.convert("L")
     image.save(processed_path)
 
+    # 処理結果メタデータ
+    processed_metadata = {
+        **image_metadata,  # 元のメタデータを継承
+        "processed_at": time.time(),
+        "processed_path": processed_path,
+        "processing_type": "grayscale",
+    }
+
     context.log.info(f"画像処理完了: {partition_key} -> {processed_path}")
 
     return Output(
-        metadata,
+        processed_metadata,
         metadata={
             "filename": partition_key,
             "original_path": image_path,
@@ -98,8 +143,6 @@ def image_sensor(context: SensorEvaluationContext):
     1. 新しい画像ファイルを検出
     2. 動的パーティションに追加
     3. 新しいパーティションのマテリアライズをリクエスト
-
-    TODO: パーティション情報の永続化
     """
     # 現在のパーティションを取得
     current_partitions = set(image_partitions.get_partitions(context.instance))
@@ -120,26 +163,24 @@ def image_sensor(context: SensorEvaluationContext):
     image_partitions.add_partitions(context.instance, list(new_partitions))
 
     # 新しいパーティションのマテリアライズをリクエスト
-    asset_key = AssetKey(["processed_images", "process_image"])
+    # 登録アセットのキー
+    register_asset_key = AssetKey(["registered_images", "register_image"])
 
     # 各パーティションに対してマテリアライズをリクエスト
     run_requests = []
     for partition in new_partitions:
-        run_key = f"process_image_{partition}_{int(time.time())}"
-        run_config = {"ops": {"process_image": {"config": {"partition": partition}}}}
+        run_key = f"register_image_{partition}_{int(time.time())}"
 
         run_requests.append(
             RunRequest(
                 run_key=run_key,
-                asset_selection=[asset_key],
+                asset_selection=[register_asset_key],
                 partition_key=partition,
                 tags={"partition": partition},
             )
         )
 
-    context.log.info(
-        f"{len(new_partitions)}個の新しい画像パーティションをマテリアライズします"
-    )
+    context.log.info(f"{len(new_partitions)}個の新しい画像パーティションを登録します")
     return run_requests
 
 
@@ -153,7 +194,7 @@ image_sensor_schedule = ScheduleDefinition(
 
 # リソースとジョブの定義
 defs = Definitions(
-    assets=[process_image],
+    assets=[register_image, process_image],
     sensors=[image_sensor],
     schedules=[image_sensor_schedule],
 )
