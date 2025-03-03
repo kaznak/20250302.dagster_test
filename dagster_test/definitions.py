@@ -1,11 +1,16 @@
 import os
+import random
 import time
+import uuid
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from dagster import (AssetExecutionContext, AssetIn, AssetKey, Definitions,
-                     DynamicPartitionsDefinition, Output, RunRequest,
-                     SensorEvaluationContext, asset, define_asset_job, sensor)
+import numpy as np
+from dagster import (AssetExecutionContext, AssetIn, AssetKey,
+                     AssetObservation, Definitions,
+                     DynamicPartitionsDefinition, MetadataValue, Output,
+                     RunRequest, SensorEvaluationContext, asset,
+                     define_asset_job, sensor)
 from PIL import Image
 
 # 画像ディレクトリの設定
@@ -13,6 +18,7 @@ BASED = Path(__file__).resolve().parents[1]
 IMAGE_DIRS = {
     "input": os.path.join(BASED, "data/input_images"),
     "output": os.path.join(BASED, "data/output_images"),
+    "versions": os.path.join(BASED, "data/image_versions"),  # バージョン保存用
 }
 
 for dir in IMAGE_DIRS.values():
@@ -86,7 +92,7 @@ def register_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
     )
 
 
-# ステップ2: 実際に画像を処理するアセット
+# ステップ2: 非決定的な処理で画像を処理するアセット
 @asset(
     partitions_def=image_partitions,
     key_prefix=["processed_images"],
@@ -97,7 +103,7 @@ def register_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
 def process_image(
     context: AssetExecutionContext, image_metadata: Dict[str, Any]
 ) -> Output[Dict[str, Any]]:
-    """登録された画像を実際に処理するアセット"""
+    """登録された画像を非決定的に処理するアセット"""
     # パーティションキーの存在チェック
     if not hasattr(context, "partition_key") or context.partition_key is None:
         raise ValueError(
@@ -114,27 +120,139 @@ def process_image(
     if not os.path.exists(image_path):
         raise FileNotFoundError(f"画像ファイルが見つかりません: {image_path}")
 
+    # バージョンIDを生成（UUID）
+    version_id = str(uuid.uuid4())
+
+    # 乱数のシード値を作成
+    seed = int(time.time() * 1000) % (2**32)
+
+    # シード値を設定して乱数を初期化
+    random.seed(seed)
+    np.random.seed(seed)
+
     # 画像を読み込む
     image = Image.open(image_path)
+
+    # 画像をNumPy配列に変換
+    img_array = np.array(image)
+
+    # 非決定的処理: シード値に基づく処理を行う
+    # 1. グレースケール変換
+    if len(img_array.shape) == 3 and img_array.shape[2] >= 3:
+        # カラー画像の場合
+        # ランダムな重みでRGBチャンネルを混合
+        r_weight = np.random.uniform(0.2, 0.4)
+        g_weight = np.random.uniform(0.3, 0.5)
+        b_weight = 1.0 - r_weight - g_weight
+
+        # RGB→グレースケール変換（非標準の重み）
+        gray_img = (
+            img_array[:, :, 0] * r_weight
+            + img_array[:, :, 1] * g_weight
+            + img_array[:, :, 2] * b_weight
+        ).astype(np.uint8)
+
+        processed_img = Image.fromarray(gray_img, mode="L")
+    else:
+        # すでにグレースケールの場合は、コントラスト調整
+        contrast_factor = np.random.uniform(0.8, 1.5)
+        processed_img = Image.fromarray(img_array)
+
+        # コントラスト調整
+        from PIL import ImageEnhance
+
+        enhancer = ImageEnhance.Contrast(processed_img)
+        processed_img = enhancer.enhance(contrast_factor)
+
+    # 2. ノイズ追加（オプション）
+    if random.random() > 0.5:
+        noise_level = np.random.uniform(5, 15)
+        img_array = np.array(processed_img)
+
+        # ノイズ生成
+        noise = np.random.normal(0, noise_level, img_array.shape).astype(np.int16)
+
+        # ノイズ追加
+        noisy_img = np.clip(img_array.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+        processed_img = Image.fromarray(noisy_img)
+
+        if processed_img.mode != "L":
+            processed_img = processed_img.convert("L")
 
     # 処理済み画像を保存するディレクトリ
     processed_dir = IMAGE_DIRS["output"]
     processed_path = os.path.join(processed_dir, f"processed_{partition_key}")
 
-    # 実際の画像処理を実行（例：グレースケール変換）
-    if image.mode != "L":
-        image = image.convert("L")
-    image.save(processed_path)
+    # バージョン管理用のディレクトリ
+    version_dir = os.path.join(IMAGE_DIRS["versions"], partition_key.split(".")[0])
+    os.makedirs(version_dir, exist_ok=True)
+
+    # バージョン付きのファイルパス
+    versioned_path = os.path.join(version_dir, f"{version_id}_{partition_key}")
+
+    # 画像を保存
+    processed_img.save(processed_path)
+    processed_img.save(versioned_path)  # バージョン付きでも保存
+
+    # 処理内容の詳細
+    processing_details = {
+        "seed": seed,
+        "version_id": version_id,
+    }
+
+    # 追加の処理情報（使用した処理オプション）
+    if len(img_array.shape) == 3 and img_array.shape[2] >= 3:
+        processing_details.update(
+            {
+                "r_weight": r_weight,
+                "g_weight": g_weight,
+                "b_weight": b_weight,
+                "type": "custom_grayscale",
+            }
+        )
+    else:
+        processing_details.update(
+            {
+                "contrast_factor": contrast_factor,
+                "type": "contrast_adjustment",
+            }
+        )
+
+    if random.random() > 0.5:
+        processing_details.update(
+            {
+                "noise_added": True,
+                "noise_level": noise_level,
+            }
+        )
 
     # 処理結果メタデータ
     processed_metadata = {
         **image_metadata,  # 元のメタデータを継承
         "processed_at": time.time(),
         "processed_path": processed_path,
-        "processing_type": "grayscale",
+        "versioned_path": versioned_path,
+        "version_id": version_id,
+        "random_seed": seed,
+        "processing_details": processing_details,
     }
 
-    context.log.info(f"画像処理完了: {partition_key} -> {processed_path}")
+    # バージョン情報をオブザベーションとして記録
+    context.log_event(
+        AssetObservation(
+            asset_key=AssetKey(["processed_images", "process_image"]),
+            metadata={
+                "version": MetadataValue.text(version_id),
+                "seed": MetadataValue.int(seed),
+                "processing_type": MetadataValue.text(str(processing_details["type"])),
+                "partition": MetadataValue.text(partition_key),
+            },
+        )
+    )
+
+    context.log.info(
+        f"画像処理完了: {partition_key} -> {processed_path} (version: {version_id})"
+    )
 
     return Output(
         processed_metadata,
@@ -142,6 +260,127 @@ def process_image(
             "filename": partition_key,
             "original_path": image_path,
             "processed_path": processed_path,
+            "version_id": MetadataValue.text(version_id),
+            "random_seed": MetadataValue.int(seed),
+            "processing_type": MetadataValue.text(str(processing_details["type"])),
+        },
+    )
+
+
+# 過去のバージョンに基づいて画像を再処理するアセット（オプション）
+@asset(
+    name="reproduce_image",
+    key_prefix=["reproduced_images"],
+    ins={
+        "image_metadata": AssetIn(key=AssetKey(["registered_images", "register_image"]))
+    },
+)
+def reproduce_image(
+    context: AssetExecutionContext,
+    image_metadata: Dict[str, Any],
+    seed: int = None,
+    version_id: str = None,
+) -> Output[Dict[str, Any]]:
+    """過去のバージョンのシード値を使って画像を再処理するアセット"""
+    # このアセットはパーティションキーとして画像ファイル名を取得
+    partition_key = context.partition_key if hasattr(context, "partition_key") else None
+
+    if partition_key is None:
+        raise ValueError("パーティションキーが指定されていません")
+
+    if seed is None and version_id is None:
+        raise ValueError("シード値またはバージョンIDを指定する必要があります")
+
+    # バージョンIDが指定されている場合、そのバージョンのメタデータからシード値を取得
+    if version_id is not None and seed is None:
+        # ここでバージョンに関連するメタデータからシード値を取得する処理を実装
+        # 例: DagsterのインスタンスAPIを使用
+        # この実装は環境によって異なるため、概念的なコードを示す
+        context.log.info(f"バージョンID {version_id} からシード値を検索中...")
+        # シード値を取得するロジックをここに実装
+        # （実際の実装は複雑になるため概念的に示します）
+        seed = context.instance.get_version_metadata(version_id).get("seed")
+
+        if seed is None:
+            raise ValueError(f"バージョン {version_id} のシード値が見つかりません")
+
+    # シード値を設定
+    context.log.info(f"画像 {partition_key} をシード値 {seed} で再処理します")
+    random.seed(seed)
+    np.random.seed(seed)
+
+    # 以下、process_imageと同様の処理だが、シード値が固定されている
+    image_path = image_metadata["image_path"]
+
+    # 画像を読み込む
+    image = Image.open(image_path)
+
+    # 画像をNumPy配列に変換
+    img_array = np.array(image)
+
+    # シード値を使った決定的な処理
+    if len(img_array.shape) == 3 and img_array.shape[2] >= 3:
+        # カラー画像の場合、ランダム（決定的）な重みでRGBチャンネルを混合
+        r_weight = np.random.uniform(0.2, 0.4)
+        g_weight = np.random.uniform(0.3, 0.5)
+        b_weight = 1.0 - r_weight - g_weight
+
+        gray_img = (
+            img_array[:, :, 0] * r_weight
+            + img_array[:, :, 1] * g_weight
+            + img_array[:, :, 2] * b_weight
+        ).astype(np.uint8)
+
+        processed_img = Image.fromarray(gray_img, mode="L")
+    else:
+        # すでにグレースケールの場合、コントラスト調整
+        contrast_factor = np.random.uniform(0.8, 1.5)
+        processed_img = Image.fromarray(img_array)
+
+        from PIL import ImageEnhance
+
+        enhancer = ImageEnhance.Contrast(processed_img)
+        processed_img = enhancer.enhance(contrast_factor)
+
+    # ノイズ追加（オプション）
+    if random.random() > 0.5:
+        noise_level = np.random.uniform(5, 15)
+        img_array = np.array(processed_img)
+        noise = np.random.normal(0, noise_level, img_array.shape).astype(np.int16)
+        noisy_img = np.clip(img_array.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+        processed_img = Image.fromarray(noisy_img)
+
+        if processed_img.mode != "L":
+            processed_img = processed_img.convert("L")
+
+    # 再現された画像を保存
+    reproduced_dir = os.path.join(IMAGE_DIRS["output"], "reproduced")
+    os.makedirs(reproduced_dir, exist_ok=True)
+
+    reproduced_path = os.path.join(reproduced_dir, f"reproduced_{seed}_{partition_key}")
+    processed_img.save(reproduced_path)
+
+    # メタデータ
+    processed_metadata = {
+        **image_metadata,
+        "reproduced_at": time.time(),
+        "reproduced_path": reproduced_path,
+        "original_seed": seed,
+        "is_reproduction": True,
+    }
+
+    context.log.info(
+        f"画像再現完了: {partition_key} -> {reproduced_path} (seed: {seed})"
+    )
+
+    return Output(
+        processed_metadata,
+        metadata={
+            "filename": partition_key,
+            "original_path": image_path,
+            "reproduced_path": reproduced_path,
+            "seed": MetadataValue.int(seed),
+            "is_reproduction": MetadataValue.bool(True),
         },
     )
 
@@ -152,6 +391,16 @@ image_processing_job = define_asset_job(
     selection=[
         AssetKey(["registered_images", "register_image"]),
         AssetKey(["processed_images", "process_image"]),
+    ],
+)
+
+
+# 再現処理用のジョブ定義
+reproduction_job = define_asset_job(
+    name="reproduction_job",
+    selection=[
+        AssetKey(["registered_images", "register_image"]),
+        AssetKey(["reproduced_images", "reproduce_image"]),
     ],
 )
 
@@ -230,11 +479,10 @@ def image_sensor(context: SensorEvaluationContext):
 
 # リソースとジョブの定義
 defs = Definitions(
-    assets=[register_image, process_image],
+    assets=[register_image, process_image, reproduce_image],
     sensors=[image_sensor],
-    jobs=[image_processing_job],  # ジョブを追加
+    jobs=[image_processing_job, reproduction_job],
 )
 
 if __name__ == "__main__":
-    # スクリプトを直接実行したときのために、何か便利な処理を追加することもできます
     print("Dagsterセンサーベース画像処理パイプラインを起動します...")
