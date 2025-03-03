@@ -5,8 +5,7 @@ from typing import Any, Dict, List
 
 from dagster import (AssetExecutionContext, AssetIn, AssetKey, Definitions,
                      DynamicPartitionsDefinition, Output, RunRequest,
-                     ScheduleDefinition, SensorEvaluationContext, asset,
-                     define_asset_job, sensor)
+                     SensorEvaluationContext, asset, define_asset_job, sensor)
 from PIL import Image
 
 # 画像ディレクトリの設定
@@ -40,7 +39,7 @@ def get_image_files() -> List[str]:
 def register_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
     """パーティション（画像ファイル）を登録するだけのアセット"""
     # パーティションキーの存在チェック
-    if not context.has_partition_key:
+    if not hasattr(context, "partition_key") or context.partition_key is None:
         raise ValueError(
             "このアセットはパーティションキーを指定して実行する必要があります"
         )
@@ -91,6 +90,12 @@ def process_image(
     context: AssetExecutionContext, image_metadata: Dict[str, Any]
 ) -> Output[Dict[str, Any]]:
     """登録された画像を実際に処理するアセット"""
+    # パーティションキーの存在チェック
+    if not hasattr(context, "partition_key") or context.partition_key is None:
+        raise ValueError(
+            "このアセットはパーティションキーを指定して実行する必要があります"
+        )
+
     # パーティション（画像ファイル名）を取得
     partition_key = context.partition_key
     image_path = image_metadata["image_path"]
@@ -134,9 +139,19 @@ def process_image(
     )
 
 
+# 画像処理パイプラインのジョブ定義
+image_processing_job = define_asset_job(
+    name="image_processing_job",
+    selection=[
+        AssetKey(["registered_images", "register_image"]),
+        AssetKey(["processed_images", "process_image"]),
+    ],
+)
+
+
 # 新しい画像パーティションを検出し、マテリアライズするセンサー
 @sensor(
-    job_name=None,  # アセットベースのセンサーなのでジョブ名は不要
+    job=image_processing_job,  # ジョブを関連付ける
 )
 def image_sensor(context: SensorEvaluationContext):
     """
@@ -163,7 +178,6 @@ def image_sensor(context: SensorEvaluationContext):
     context.log.info(f"新しい画像パーティションを追加: {new_partitions}")
     image_partitions.add_partitions(context.instance, list(new_partitions))
 
-    # 新しいパーティションのマテリアライズをリクエスト
     # 登録アセットのキー
     register_asset_key = AssetKey(["registered_images", "register_image"])
 
@@ -185,30 +199,11 @@ def image_sensor(context: SensorEvaluationContext):
     return run_requests
 
 
-# スケジュールの定義
-# 注意: センサーは自動的に実行されるため、通常はスケジュールで実行する必要はありません
-# センサー実行用のジョブ定義（アセットでなくセンサーを実行する）
-from dagster import sensor_evaluation_job
-
-# センサー評価ジョブの作成
-image_sensor_eval_job = sensor_evaluation_job(
-    name="image_sensor_eval_job",
-    sensors=[image_sensor],  # image_sensorセンサーを実行するジョブ
-)
-
-# スケジュール定義
-image_sensor_schedule = ScheduleDefinition(
-    name="run_image_sensor",
-    cron_schedule="*/1 * * * *",  # 1分ごとに実行
-    job=image_sensor_eval_job,  # センサー評価ジョブを使用
-    execution_timezone="Asia/Tokyo",
-)
-
 # リソースとジョブの定義
 defs = Definitions(
     assets=[register_image, process_image],
     sensors=[image_sensor],
-    schedules=[image_sensor_schedule],
+    jobs=[image_processing_job],  # ジョブを追加
 )
 
 if __name__ == "__main__":
