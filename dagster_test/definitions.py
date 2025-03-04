@@ -18,6 +18,7 @@ IMAGE_DIRS = {
     "output": os.path.join(BASED, "data/output_images"),
 }
 
+# 画像ディレクトリの作成
 for dir in IMAGE_DIRS.values():
     os.makedirs(dir, exist_ok=True)
 
@@ -52,6 +53,7 @@ def get_image_files() -> List[str]:
     partitions_def=image_partitions,
     key_prefix=["registered_images"],
     kinds=["python", "view"],
+    group_name="image_test",
 )
 def register_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
     """パーティション（画像ファイル）を登録するだけのアセット"""
@@ -103,6 +105,7 @@ def register_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
         "image_metadata": AssetIn(key=AssetKey(["registered_images", "register_image"]))
     },
     kinds=["python", "view"],
+    group_name="image_test",
 )
 def process_image_deterministic(
     context: AssetExecutionContext, image_metadata: Dict[str, Any]
@@ -167,6 +170,7 @@ def process_image_deterministic(
         "image_metadata": AssetIn(key=AssetKey(["registered_images", "register_image"]))
     },
     kinds=["python", "view"],
+    group_name="image_test",
 )
 def process_image_non_deterministic(
     context: AssetExecutionContext, image_metadata: Dict[str, Any]
