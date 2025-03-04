@@ -77,7 +77,7 @@ def register_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
     image = Image.open(image_path)
 
     # 登録用メタデータ
-    metadata = {
+    processed_metadata = {
         "filename": partition_key,
         "format": image.format,
         "size": image.size,
@@ -86,10 +86,10 @@ def register_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
         "image_path": image_path,
     }
 
-    context.log.info(f"画像登録完了: {partition_key}")
+    context.log.info(f"画像登録実行: {partition_key}")
 
     return Output(
-        metadata,
+        processed_metadata,
         metadata={
             "filename": partition_key,
             "original_path": image_path,
