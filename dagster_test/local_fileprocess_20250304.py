@@ -52,7 +52,8 @@ def get_image_files() -> List[str]:
 @asset(
     partitions_def=image_partitions,
     key_prefix=["registered_images"],
-    kinds=["python", "view"],
+    metadata={"deterministic": True},
+    kinds=["python", "view", "deterministic"],
     group_name="image_test",
 )
 def register_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
@@ -97,20 +98,21 @@ def register_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
     )
 
 
-# ステップ2: 決定的処理（元の処理を維持）
+# ステップ2: 決定的処理
 @asset(
     partitions_def=image_partitions,
     key_prefix=["processed_images"],
+    metadata={"deterministic": True},
     ins={
         "image_metadata": AssetIn(key=AssetKey(["registered_images", "register_image"]))
     },
-    kinds=["python", "view"],
+    kinds=["python", "view", "deterministic"],
     group_name="image_test",
 )
 def process_image_deterministic(
     context: AssetExecutionContext, image_metadata: Dict[str, Any]
 ) -> Output[Dict[str, Any]]:
-    """登録された画像を決定的に処理するアセット（元のグレースケール変換）"""
+    """登録された画像を決定的に処理するアセット（グレースケール変換）"""
     # パーティションキーの存在チェック
     if not hasattr(context, "partition_key") or context.partition_key is None:
         raise ValueError(
@@ -166,6 +168,7 @@ def process_image_deterministic(
 @asset(
     partitions_def=image_partitions,
     key_prefix=["processed_images"],
+    metadata={"deterministic": False},
     ins={
         "image_metadata": AssetIn(key=AssetKey(["registered_images", "register_image"]))
     },
