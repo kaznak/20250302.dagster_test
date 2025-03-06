@@ -334,43 +334,28 @@ def image_sensor(context: SensorEvaluationContext):
         run_key_base = f"image_{file}_{int(time.time())}"
         request_config = RequestConfig(request_id=file)
 
-        # まずは登録アセットのマテリアライズをリクエスト
-        run_key = f"register_{run_key_base}"
-        asset_key = AssetKey(["registered_images", "register_image"])
-        run_requests.append(
-            RunRequest(
-                run_key=run_key,
-                asset_selection=[asset_key],
-                tags={
-                    "request_id": file,
-                    "step": "register",
-                    "processing_type": asset_key.path[-1],
-                },
-                run_config=RunConfig(
-                    ops={
-                        asset_key.to_python_identifier(): {
-                            "config": request_config._convert_to_config_dictionary()
-                        }
-                    }
-                ),
-            )
-        )
-
-        # 次に処理アセットのマテリアライズをリクエスト
-        for idx, asset_key in enumerate(
+        # アセットのマテリアライズをリクエスト
+        for idx, (step, asset_key) in enumerate(
             [
-                AssetKey(["processed_images", "process_image_deterministic"]),
-                AssetKey(["processed_images", "process_image_non_deterministic"]),
+                ("register", AssetKey(["registered_images", "register_image"])),
+                (
+                    "process",
+                    AssetKey(["processed_images", "process_image_deterministic"]),
+                ),
+                (
+                    "process",
+                    AssetKey(["processed_images", "process_image_non_deterministic"]),
+                ),
             ]
         ):
-            run_key = f"process_{idx}_{run_key_base}"
+            run_key = f"{step}_{idx}_{run_key_base}"
             run_requests.append(
                 RunRequest(
                     run_key=run_key,
                     asset_selection=[asset_key],
                     tags={
                         "request_id": file,
-                        "step": "process",
+                        "step": step,
                         "processing_type": asset_key.path[-1],
                     },
                     run_config=RunConfig(
