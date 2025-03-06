@@ -2,6 +2,12 @@
 
 This is a [Dagster](https://dagster.io/) project scaffolded with [`dagster project scaffold`](https://docs.dagster.io/guides/build/projects/creating-a-new-project).
 
+## ブランチ
+
+- wip.20250303T112711: 決定的処理・非決定的処理両方を含むパターン
+- wip.20250306T071821: パーティションを使用しないパターン
+- wip.20250306T135815: 作業中 IO Manager を使うパターン
+
 ## Getting started
 
 First, install your Dagster code location as a Python package. By using the --editable flag, pip will install your Python package in ["editable mode"](https://pip.pypa.io/en/latest/topics/local-project-installs/#editable-installs) so that as you develop, local code changes will automatically apply.
