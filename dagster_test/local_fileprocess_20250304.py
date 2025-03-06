@@ -3,13 +3,13 @@ import os
 import random
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import numpy as np
 from dagster import (AssetExecutionContext, AssetIn, AssetKey, Definitions,
-                     DynamicPartitionsDefinition, Output, RunRequest,
-                     SensorEvaluationContext, asset, define_asset_job, sensor)
-from PIL import Image, ImageEnhance, ImageFilter
+                     Output, RunRequest, SensorEvaluationContext, SensorResult,
+                     asset, define_asset_job, sensor)
+from PIL import Image
 
 # 画像ディレクトリの設定
 BASED = Path(__file__).resolve().parents[1]
@@ -27,9 +27,6 @@ PROCESSING_TYPES = {
     "deterministic": "決定的処理（グレースケール変換）",
     "non_deterministic": "非決定的処理（ランダム効果）",
 }
-
-# 動的パーティションの定義
-image_partitions = DynamicPartitionsDefinition(name="image_partitions")
 
 
 # 画像ファイル名の一覧を取得する関数
@@ -50,23 +47,19 @@ def get_image_files() -> List[str]:
 
 # ステップ1: 画像を登録するアセット（ファイル自体には何もしない）
 @asset(
-    partitions_def=image_partitions,
     key_prefix=["registered_images"],
     metadata={"deterministic": True},
     kinds=["python", "view", "deterministic"],
     group_name="image_test",
 )
 def register_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
-    """パーティション（画像ファイル）を登録するだけのアセット"""
-    # パーティションキーの存在チェック
-    if not hasattr(context, "partition_key") or context.partition_key is None:
-        raise ValueError(
-            "このアセットはパーティションキーを指定して実行する必要があります"
-        )
+    """画像ファイルを登録するだけのアセット"""
+    # タグを取得
+    tags = context.run.tags
 
-    # パーティション（画像ファイル名）を取得
-    partition_key = context.partition_key
-    image_path = os.path.join(IMAGE_DIRS["input"], partition_key)
+    # 画像ファイル名を取得
+    filename = tags.get("request_id")
+    image_path = os.path.join(IMAGE_DIRS["input"], filename)
 
     context.log.info(f"画像を登録中: {image_path}")
 
@@ -79,7 +72,7 @@ def register_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
 
     # 登録用メタデータ
     metadata = {
-        "filename": partition_key,
+        "filename": filename,
         "format": image.format,
         "size": image.size,
         "mode": image.mode,
@@ -87,12 +80,12 @@ def register_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
         "image_path": image_path,
     }
 
-    context.log.info(f"画像登録完了: {partition_key}")
+    context.log.info(f"画像登録完了: {filename}")
 
     return Output(
         metadata,
         metadata={
-            "filename": partition_key,
+            "filename": filename,
             "original_path": image_path,
         },
     )
@@ -100,7 +93,6 @@ def register_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
 
 # ステップ2: 決定的処理
 @asset(
-    partitions_def=image_partitions,
     key_prefix=["processed_images"],
     metadata={"deterministic": True},
     ins={
@@ -113,14 +105,11 @@ def process_image_deterministic(
     context: AssetExecutionContext, image_metadata: Dict[str, Any]
 ) -> Output[Dict[str, Any]]:
     """登録された画像を決定的に処理するアセット（グレースケール変換）"""
-    # パーティションキーの存在チェック
-    if not hasattr(context, "partition_key") or context.partition_key is None:
-        raise ValueError(
-            "このアセットはパーティションキーを指定して実行する必要があります"
-        )
+    # タグを取得
+    tags = context.run.tags
 
-    # パーティション（画像ファイル名）を取得
-    partition_key = context.partition_key
+    # 画像ファイル名を取得
+    filename = tags.get("request_id")
     image_path = image_metadata["image_path"]
 
     context.log.info(f"画像を決定的に処理中: {image_path}")
@@ -134,7 +123,7 @@ def process_image_deterministic(
 
     # 処理済み画像を保存するディレクトリ
     processed_dir = IMAGE_DIRS["output"]
-    processed_path = os.path.join(processed_dir, f"deterministic_{partition_key}")
+    processed_path = os.path.join(processed_dir, f"deterministic_{filename}")
 
     # 決定的画像処理を実行（グレースケール変換）
     if image.mode != "L":
@@ -151,12 +140,12 @@ def process_image_deterministic(
         "is_deterministic": True,
     }
 
-    context.log.info(f"決定的画像処理完了: {partition_key} -> {processed_path}")
+    context.log.info(f"決定的画像処理完了: {filename} -> {processed_path}")
 
     return Output(
         processed_metadata,
         metadata={
-            "filename": partition_key,
+            "filename": filename,
             "original_path": image_path,
             "processed_path": processed_path,
             "processing_type": "deterministic",
@@ -166,7 +155,6 @@ def process_image_deterministic(
 
 # ステップ3: 非決定的処理（バージョン管理機能付き）
 @asset(
-    partitions_def=image_partitions,
     key_prefix=["processed_images"],
     metadata={"deterministic": False},
     ins={
@@ -179,14 +167,11 @@ def process_image_non_deterministic(
     context: AssetExecutionContext, image_metadata: Dict[str, Any]
 ) -> Output[Dict[str, Any]]:
     """登録された画像を乱数を使って非決定的に処理するアセット（バージョン管理機能付き）"""
-    # パーティションキーの存在チェック
-    if not hasattr(context, "partition_key") or context.partition_key is None:
-        raise ValueError(
-            "このアセットはパーティションキーを指定して実行する必要があります"
-        )
+    # タグを取得
+    tags = context.run.tags
 
-    # パーティション（画像ファイル名）を取得
-    partition_key = context.partition_key
+    # 画像ファイル名を取得
+    filename = tags.get("request_id")
     image_path = image_metadata["image_path"]
 
     context.log.info(f"画像を非決定的に処理中: {image_path}")
@@ -197,7 +182,7 @@ def process_image_non_deterministic(
 
     # 乱数のシード値を生成
     # 現在時刻とパーティションキーからハッシュ値を生成して初期シードとする
-    initial_seed = hash(f"{partition_key}_{time.time()}")
+    initial_seed = hash(f"{filename}_{time.time()}")
     random.seed(initial_seed)
 
     # 実際に使用する乱数シード値
@@ -214,7 +199,7 @@ def process_image_non_deterministic(
     version = f"v{timestamp}"
 
     # バージョンディレクトリ作成
-    version_dir = os.path.join(IMAGE_DIRS["output"], f"versions_{partition_key}")
+    version_dir = os.path.join(IMAGE_DIRS["output"], f"versions_{filename}")
     os.makedirs(version_dir, exist_ok=True)
 
     # 画像を読み込む
@@ -224,21 +209,18 @@ def process_image_non_deterministic(
     processing_ops = []
 
     # 回転角度を選択（90度、180度、270度のいずれか）
-    rotation_options = [90, 180, 270]
-    rotation_angle = random.choice(rotation_options)
+    rotation_angle = random.choice([90, 180, 270])
 
     # 画像を回転
     image = image.rotate(rotation_angle, expand=True)
     processing_ops.append(f"rotate: {rotation_angle} degrees")
 
     # バージョン付きの保存パス
-    version_file_name = f"{version}_{partition_key}"
+    version_file_name = f"{version}_{filename}"
     version_path = os.path.join(version_dir, version_file_name)
 
     # 最新バージョンを示す通常の出力パス
-    latest_path = os.path.join(
-        IMAGE_DIRS["output"], f"non_deterministic_{partition_key}"
-    )
+    latest_path = os.path.join(IMAGE_DIRS["output"], f"non_deterministic_{filename}")
 
     # 処理した画像をバージョン付きで保存
     image.save(version_path)
@@ -288,7 +270,7 @@ def process_image_non_deterministic(
         "is_deterministic": False,  # 非決定的処理であることを明示
     }
 
-    context.log.info(f"非決定的画像処理完了: {partition_key}")
+    context.log.info(f"非決定的画像処理完了: {filename}")
     context.log.info(f"バージョン: {version}")
     context.log.info(f"バージョン保存先: {version_path}")
     context.log.info(f"最新バージョン保存先: {latest_path}")
@@ -297,7 +279,7 @@ def process_image_non_deterministic(
     return Output(
         processed_metadata,
         metadata={
-            "filename": partition_key,
+            "filename": filename,
             "original_path": image_path,
             "processed_path": latest_path,
             "version_path": version_path,
@@ -308,47 +290,6 @@ def process_image_non_deterministic(
         },
     )
 
-
-# 画像処理タイプを選択するための設定を取得または既定値を返す関数
-def get_processing_type_config(context: SensorEvaluationContext) -> str:
-    """
-    画像処理タイプの設定を取得する
-    現在のジョブタグや環境変数から処理タイプを取得、なければ既定値を返す
-    """
-    # 環境変数から取得を試みる
-    processing_type = os.environ.get("IMAGE_PROCESSING_TYPE")
-
-    # タグなどから設定を取得する方法もあれば追加可能
-
-    # 既定値は両方のタイプを実行（または "deterministic" または "non_deterministic" だけを返すことも可能）
-    if not processing_type or processing_type not in [
-        "deterministic",
-        "non_deterministic",
-        "both",
-    ]:
-        processing_type = "both"
-
-    context.log.info(f"画像処理タイプ設定: {processing_type}")
-    return processing_type
-
-
-# 決定的処理のジョブ定義
-deterministic_processing_job = define_asset_job(
-    name="deterministic_processing_job",
-    selection=[
-        AssetKey(["registered_images", "register_image"]),
-        AssetKey(["processed_images", "process_image_deterministic"]),
-    ],
-)
-
-# 非決定的処理のジョブ定義
-non_deterministic_processing_job = define_asset_job(
-    name="non_deterministic_processing_job",
-    selection=[
-        AssetKey(["registered_images", "register_image"]),
-        AssetKey(["processed_images", "process_image_non_deterministic"]),
-    ],
-)
 
 # 両方の処理を含むジョブ定義
 all_processing_job = define_asset_job(
@@ -363,104 +304,62 @@ all_processing_job = define_asset_job(
 
 # 新しい画像を検出し、選択された処理タイプで処理するセンサー
 @sensor(
-    job=all_processing_job,  # 既定では両方のジョブを実行
+    job=all_processing_job,
 )
 def image_sensor(context: SensorEvaluationContext):
     """
     画像ディレクトリを監視し、新しい画像を検出して処理するセンサー
     処理タイプの設定に基づいて、決定的処理、非決定的処理、または両方を実行
     """
-    # 現在のパーティションを取得
-    try:
-        current_partitions = set(
-            context.instance.get_dynamic_partitions(image_partitions.name)
-        )
-    except Exception as e:
-        context.log.error(f"パーティション取得中にエラー: {e}")
-        current_partitions = set()
+    # 前回のカーソルを取得
+    previous_state = json.loads(context.cursor) if context.cursor else {}
 
-    # ディレクトリ内の画像ファイルを取得
-    image_files = get_image_files()
-    available_partitions = set(image_files)
-
-    # 新しいパーティションを検出
-    new_partitions = available_partitions - current_partitions
-
-    if not new_partitions:
-        context.log.info("新しい画像パーティションはありません")
-        return
-
-    # 新しいパーティションを追加
-    context.log.info(f"新しい画像パーティションを追加: {new_partitions}")
-    try:
-        context.instance.add_dynamic_partitions(
-            image_partitions.name, list(new_partitions)
-        )
-        context.log.info("パーティションを追加しました")
-    except Exception as e:
-        context.log.error(f"パーティション追加中にエラー: {e}")
-        # 代替手段としてDynamicPartitionsDefinitionのAPIを直接使用
-        try:
-            for partition in new_partitions:
-                context.instance.add_dynamic_partition(image_partitions.name, partition)
-            context.log.info("個別に各パーティションを追加しました")
-        except Exception as e2:
-            context.log.error(f"個別パーティション追加中にエラー: {e2}")
-            return
-
-    # 処理タイプの設定を取得
-    processing_type = get_processing_type_config(context)
-
-    # 登録アセットのキー
-    register_asset_key = AssetKey(["registered_images", "register_image"])
-
-    # 処理タイプに応じて処理アセットのキーを選択
-    processing_asset_keys = []
-    if processing_type in ["deterministic", "both"]:
-        processing_asset_keys.append(
-            AssetKey(["processed_images", "process_image_deterministic"])
-        )
-
-    if processing_type in ["non_deterministic", "both"]:
-        processing_asset_keys.append(
-            AssetKey(["processed_images", "process_image_non_deterministic"])
-        )
-
-    # 各パーティションに対してマテリアライズをリクエスト
+    # 各ファイルのマテリアライズをリクエスト
+    process_files = []
     run_requests = []
-    for partition in new_partitions:
-        run_key_base = f"image_{partition}_{int(time.time())}"
+    for file in get_image_files():
+        # すでに処理済みのファイルはスキップ
+        if file in previous_state:
+            continue
+
+        # 新しいファイルの処理
+        process_files.append(file)
+        previous_state[file] = time.time()
+
+        run_key_base = f"image_{file}_{int(time.time())}"
 
         # まずは登録アセットのマテリアライズをリクエスト
         register_run_key = f"register_{run_key_base}"
         run_requests.append(
             RunRequest(
                 run_key=register_run_key,
-                asset_selection=[register_asset_key],
-                partition_key=partition,
-                tags={"partition": partition, "step": "register"},
+                asset_selection=[AssetKey(["registered_images", "register_image"])],
+                tags={"request_id": file, "step": "register"},
             )
         )
 
         # 次に処理アセットのマテリアライズをリクエスト
-        for idx, asset_key in enumerate(processing_asset_keys):
+        for idx, asset_key in enumerate(
+            [
+                AssetKey(["processed_images", "process_image_deterministic"]),
+                AssetKey(["processed_images", "process_image_non_deterministic"]),
+            ]
+        ):
             process_run_key = f"process_{idx}_{run_key_base}"
             run_requests.append(
                 RunRequest(
                     run_key=process_run_key,
                     asset_selection=[asset_key],
-                    partition_key=partition,
                     tags={
-                        "partition": partition,
+                        "request_id": file,
                         "step": "process",
                         "processing_type": asset_key.path[-1],
                     },
                 )
             )
 
-    context.log.info(f"{len(new_partitions)}個の新しい画像パーティションを処理します")
-    context.log.info(f"処理タイプ: {processing_type}")
-    return run_requests
+    context.log.info(f"{len(process_files)}個の新しい画像を処理します")
+    return SensorResult(run_requests=run_requests, cursor=json.dumps(previous_state))
 
 
 dgdef = {
@@ -471,8 +370,6 @@ dgdef = {
     ],
     "sensors": [image_sensor],
     "jobs": [
-        deterministic_processing_job,
-        non_deterministic_processing_job,
         all_processing_job,
     ],
 }
