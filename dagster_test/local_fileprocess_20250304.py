@@ -22,12 +22,6 @@ IMAGE_DIRS = {
 for dir in IMAGE_DIRS.values():
     os.makedirs(dir, exist_ok=True)
 
-# 処理タイプ定義
-PROCESSING_TYPES = {
-    "deterministic": "決定的処理（グレースケール変換）",
-    "non_deterministic": "非決定的処理（ランダム効果）",
-}
-
 
 class RequestConfig(Config):
     """処理リクエストのRunConfig"""
@@ -388,8 +382,3 @@ if __name__ == "__main__":
     print(
         "Dagsterセンサーベース画像処理パイプライン（決定的/非決定的処理）を起動します..."
     )
-    print(f"利用可能な処理タイプ: {PROCESSING_TYPES}")
-    print("処理タイプの設定方法: 環境変数 IMAGE_PROCESSING_TYPE を設定してください")
-    print("  - deterministic: 決定的処理のみ実行")
-    print("  - non_deterministic: 非決定的処理のみ実行")
-    print("  - both: 両方の処理を実行（既定値）")
