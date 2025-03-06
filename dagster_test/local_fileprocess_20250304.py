@@ -30,22 +30,6 @@ PROCESSING_TYPES = {
 }
 
 
-# 画像ファイル名の一覧を取得する関数
-def get_image_files() -> List[str]:
-    """指定されたディレクトリ内の画像ファイルのリストを返す"""
-    image_extensions = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]
-    image_files = []
-
-    for file in os.listdir(IMAGE_DIRS["input"]):
-        file_path = os.path.join(IMAGE_DIRS["input"], file)
-        if os.path.isfile(file_path) and any(
-            file.lower().endswith(ext) for ext in image_extensions
-        ):
-            image_files.append(file)
-
-    return image_files
-
-
 class RequestConfig(Config):
     """処理リクエストのRunConfig"""
 
@@ -322,6 +306,22 @@ def image_sensor(context: SensorEvaluationContext):
     # 各ファイルのマテリアライズをリクエスト
     process_files = []
     run_requests = []
+
+    # 画像ファイル名の一覧を取得する関数
+    def get_image_files() -> List[str]:
+        """指定されたディレクトリ内の画像ファイルのリストを返す"""
+        image_extensions = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]
+        image_files = []
+
+        for file in os.listdir(IMAGE_DIRS["input"]):
+            file_path = os.path.join(IMAGE_DIRS["input"], file)
+            if os.path.isfile(file_path) and any(
+                file.lower().endswith(ext) for ext in image_extensions
+            ):
+                image_files.append(file)
+
+        return image_files
+
     for file in get_image_files():
         # すでに処理済みのファイルはスキップ
         if file in previous_state:
@@ -368,7 +368,10 @@ def image_sensor(context: SensorEvaluationContext):
                 )
             )
 
-    context.log.info(f"{len(process_files)}個の新しい画像を処理します")
+    if process_files:
+        context.log.info(f"{len(process_files)}個の新しい画像を処理します")
+    else:
+        context.log.debug("新しい画像はありません")
     return SensorResult(run_requests=run_requests, cursor=json.dumps(previous_state))
 
 
