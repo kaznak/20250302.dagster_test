@@ -5,7 +5,6 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
-import numpy as np
 from dagster import (AssetExecutionContext, AssetIn, AssetKey, Config,
                      Definitions, Output, RunConfig, RunRequest,
                      SensorEvaluationContext, SensorResult, asset,
@@ -104,10 +103,6 @@ def process_image_deterministic(
 
     context.log.info(f"画像を決定的に処理中: {image_path}")
 
-    # 画像が存在するか確認
-    if not os.path.exists(image_path):
-        raise FileNotFoundError(f"画像ファイルが見つかりません: {image_path}")
-
     # 画像を読み込む
     image = Image.open(image_path)
 
@@ -165,10 +160,6 @@ def process_image_non_deterministic(
 
     context.log.info(f"画像を非決定的に処理中: {image_path}")
 
-    # 画像が存在するか確認
-    if not os.path.exists(image_path):
-        raise FileNotFoundError(f"画像ファイルが見つかりません: {image_path}")
-
     # 乱数のシード値を生成
     # 現在時刻とパーティションキーからハッシュ値を生成して初期シードとする
     initial_seed = hash(f"{filename}_{time.time()}")
@@ -179,7 +170,6 @@ def process_image_non_deterministic(
 
     # シード値を設定
     random.seed(seed)
-    np.random.seed(seed)
 
     context.log.info(f"乱数シード値: {seed}")
 
