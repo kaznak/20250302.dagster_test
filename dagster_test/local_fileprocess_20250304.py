@@ -6,9 +6,10 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import numpy as np
-from dagster import (AssetExecutionContext, AssetIn, AssetKey, Definitions,
-                     Output, RunRequest, SensorEvaluationContext, SensorResult,
-                     asset, define_asset_job, sensor)
+from dagster import (AssetExecutionContext, AssetIn, AssetKey, Config,
+                     Definitions, Output, RunConfig, RunRequest,
+                     SensorEvaluationContext, SensorResult, asset,
+                     define_asset_job, sensor)
 from PIL import Image
 
 # 画像ディレクトリの設定
@@ -45,20 +46,26 @@ def get_image_files() -> List[str]:
     return image_files
 
 
+class RequestConfig(Config):
+    """処理リクエストのRunConfig"""
+
+    request_id: str
+    """リクエストID（画像ファイル名）"""
+
+
 # ステップ1: 画像を登録するアセット（ファイル自体には何もしない）
 @asset(
-    key_prefix=["registered_images"],
-    metadata={"deterministic": True},
     kinds=["python", "view", "deterministic"],
     group_name="image_test",
+    key_prefix=["registered_images"],
+    metadata={"deterministic": True},
 )
-def register_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
+def register_image(
+    context: AssetExecutionContext, config: RequestConfig
+) -> Output[Dict[str, Any]]:
     """画像ファイルを登録するだけのアセット"""
-    # タグを取得
-    tags = context.run.tags
-
     # 画像ファイル名を取得
-    filename = tags.get("request_id")
+    filename = config.request_id
     image_path = os.path.join(IMAGE_DIRS["input"], filename)
 
     context.log.info(f"画像を登録中: {image_path}")
@@ -93,23 +100,22 @@ def register_image(context: AssetExecutionContext) -> Output[Dict[str, Any]]:
 
 # ステップ2: 決定的処理
 @asset(
+    kinds=["python", "view", "deterministic"],
+    group_name="image_test",
     key_prefix=["processed_images"],
     metadata={"deterministic": True},
     ins={
         "image_metadata": AssetIn(key=AssetKey(["registered_images", "register_image"]))
     },
-    kinds=["python", "view", "deterministic"],
-    group_name="image_test",
 )
 def process_image_deterministic(
-    context: AssetExecutionContext, image_metadata: Dict[str, Any]
+    context: AssetExecutionContext,
+    image_metadata: Dict[str, Any],
+    config: RequestConfig,
 ) -> Output[Dict[str, Any]]:
     """登録された画像を決定的に処理するアセット（グレースケール変換）"""
-    # タグを取得
-    tags = context.run.tags
-
     # 画像ファイル名を取得
-    filename = tags.get("request_id")
+    filename = config.request_id
     image_path = image_metadata["image_path"]
 
     context.log.info(f"画像を決定的に処理中: {image_path}")
@@ -155,23 +161,22 @@ def process_image_deterministic(
 
 # ステップ3: 非決定的処理（バージョン管理機能付き）
 @asset(
+    kinds=["python", "view"],
+    group_name="image_test",
     key_prefix=["processed_images"],
     metadata={"deterministic": False},
     ins={
         "image_metadata": AssetIn(key=AssetKey(["registered_images", "register_image"]))
     },
-    kinds=["python", "view"],
-    group_name="image_test",
 )
 def process_image_non_deterministic(
-    context: AssetExecutionContext, image_metadata: Dict[str, Any]
+    context: AssetExecutionContext,
+    image_metadata: Dict[str, Any],
+    config: RequestConfig,
 ) -> Output[Dict[str, Any]]:
     """登録された画像を乱数を使って非決定的に処理するアセット（バージョン管理機能付き）"""
-    # タグを取得
-    tags = context.run.tags
-
     # 画像ファイル名を取得
-    filename = tags.get("request_id")
+    filename = config.request_id
     image_path = image_metadata["image_path"]
 
     context.log.info(f"画像を非決定的に処理中: {image_path}")
@@ -309,7 +314,7 @@ all_processing_job = define_asset_job(
 def image_sensor(context: SensorEvaluationContext):
     """
     画像ディレクトリを監視し、新しい画像を検出して処理するセンサー
-    処理タイプの設定に基づいて、決定的処理、非決定的処理、または両方を実行
+    決定的処理、非決定的処理の両方を実行
     """
     # 前回のカーソルを取得
     previous_state = json.loads(context.cursor) if context.cursor else {}
@@ -327,14 +332,27 @@ def image_sensor(context: SensorEvaluationContext):
         previous_state[file] = time.time()
 
         run_key_base = f"image_{file}_{int(time.time())}"
+        request_config = RequestConfig(request_id=file)
 
         # まずは登録アセットのマテリアライズをリクエスト
-        register_run_key = f"register_{run_key_base}"
+        run_key = f"register_{run_key_base}"
+        asset_key = AssetKey(["registered_images", "register_image"])
         run_requests.append(
             RunRequest(
-                run_key=register_run_key,
-                asset_selection=[AssetKey(["registered_images", "register_image"])],
-                tags={"request_id": file, "step": "register"},
+                run_key=run_key,
+                asset_selection=[asset_key],
+                tags={
+                    "request_id": file,
+                    "step": "register",
+                    "processing_type": asset_key.path[-1],
+                },
+                run_config=RunConfig(
+                    ops={
+                        asset_key.to_python_identifier(): {
+                            "config": request_config._convert_to_config_dictionary()
+                        }
+                    }
+                ),
             )
         )
 
@@ -345,16 +363,23 @@ def image_sensor(context: SensorEvaluationContext):
                 AssetKey(["processed_images", "process_image_non_deterministic"]),
             ]
         ):
-            process_run_key = f"process_{idx}_{run_key_base}"
+            run_key = f"process_{idx}_{run_key_base}"
             run_requests.append(
                 RunRequest(
-                    run_key=process_run_key,
+                    run_key=run_key,
                     asset_selection=[asset_key],
                     tags={
                         "request_id": file,
                         "step": "process",
                         "processing_type": asset_key.path[-1],
                     },
+                    run_config=RunConfig(
+                        ops={
+                            asset_key.to_python_identifier(): {
+                                "config": request_config._convert_to_config_dictionary()
+                            }
+                        }
+                    ),
                 )
             )
 
